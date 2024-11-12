@@ -67,24 +67,30 @@ def extraer_links_page_request(url,prefixes):
         response = requests.get(url)
         soup = BeautifulSoup(response.content, 'html.parser')
         enlaces = soup.find_all('a')
+
+        # Procesa cada enlace, asegura que el enlace sea absoluto y limítalo según el prefijo
         for enlace in enlaces:
             url = enlace.get('href')
-            if url != None and url.startswith('http') == False:
+            if url is not None and url.startswith('http') == False:
                 url = urljoin(response.url,url)
-            elif url == None:
+            elif url is None:
                 url = ""
+
+            # Limpia y filtra cada URL
             enlace_limpiado = limpiar_url(url)
             urls = agregar_url(urls,enlace_limpiado) if filtrar_link(enlace_limpiado,prefixes) == True else urls
     except Exception as e:
-        print(f"ERROR en {enlace}: {e}")
+        print(f"ERROR en {url}: {e}")
         pass
     return urls
 
 def limpiar_url(url):
+    # Elimina fragmentos y query params de la URL para limpieza y normalización
     cleaned_url = urlunsplit((*(urlparse(url)[:3]), '', ''))
     return cleaned_url
 
 def agregar_url(unique_links, url):
+    # Utiliza `setdefault` para añadir enlaces únicos al diccionario
     unique_links.setdefault(url, "")
     return unique_links
 
@@ -99,6 +105,7 @@ def url_comienza_con(url, lista) -> bool:
     return False
 
 def filtrar_link(url,prefixes):
+    # Filtra URLs que comienzan con ciertos prefijos
     if url_comienza_con(url, prefixes) and url not in prefixes:
         return True
     return False
@@ -137,6 +144,20 @@ def fetch_html(link_request: LinkRequest = Body(...)):
 
 @router.get("/fetch_links_page", response_model=FetchLinksPageResponse, response_description="Extrae los links de una pagina web", status_code=status.HTTP_200_OK)
 def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)):
+    """
+    Endpoint para extraer todos los enlaces de una página web especificada en el `fetch_links_page_request`.
+
+    Argumentos:
+        fetch_links_page_request (FetchLinksPageRequest): Un objeto que contiene los siguientes atributos:
+            - link (str): La URL de la página web de la cual se desean extraer los enlaces.
+            - prefixes (list[str]): Una lista de prefijos que los enlaces debe ser excluidos..
+            - metodo (str): El metodo de extracción a utilizar, puede ser "selenium" o "requests".
+
+    Retorna:
+        dict: Un diccionario que contiene:
+            - links (list[str]): Lista de URLs únicas extraídas que cumplen con los prefijos especificados excluidos.
+            - detail (str): Mensaje indicando el metodo utilizado o detalles sobre el estado de la extracción.
+    """
     try:
         urls = {}
         # Convertir el modelo de petición a un formato JSON serializable
@@ -146,7 +167,7 @@ def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)
         prefixes = fetch_links_page_request_json["prefixes"]
         metodo = fetch_links_page_request_json["metodo"]
 
-        # Llamar a la función de extracción según el metodo especificado
+        # Llama a la función de extracción según el metodo especificado
         if metodo == "selenium":
             html_content, response_detail = fetch_html_selenium(link)
         elif metodo == "requests":
@@ -154,6 +175,7 @@ def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)
         else:
             return "", "Metodo solicitado no encontrado"
 
+        # Extrae enlaces de la página y filtra
         soup = BeautifulSoup(html_content, 'html.parser')
         enlaces = soup.find_all('a')
         for enlace in enlaces:
@@ -162,9 +184,11 @@ def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)
                 url = urljoin(link, url)
             elif url is None:
                 url = ""
+
             enlace_limpiado = limpiar_url(url)
             urls = agregar_url(urls, enlace_limpiado) if filtrar_link(enlace_limpiado, prefixes) == True else urls
-        # Retornar el contenido HTML extraído y un mensaje de éxito
+
+        # Retornar la lista de links
         return {"links": list(urls), "detail": response_detail}
     except ValueError as e:
         # Manejar errores y retornar un mensaje de error

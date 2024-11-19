@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import List
 
 class LinkRequest(BaseModel):
     """
@@ -29,7 +30,7 @@ class HTMLResponse(BaseModel):
 class FetchLinksPageRequest(BaseModel):
     link: str  # Enlace de la noticia a consultar
     metodo: str  # Metodo de búsqueda a utilizar (por ejemplo, 'selenium' o 'requests')
-    prefixes: list[str] = []
+    prefixes: List[str]
 
     class Config:
         # Configuración adicional para el modelo de datos
@@ -43,6 +44,6 @@ class FetchLinksPageRequest(BaseModel):
         }
 
 class FetchLinksPageResponse(BaseModel):
-    links: list[str] = []
+    links: List[str]
     detail: str
 

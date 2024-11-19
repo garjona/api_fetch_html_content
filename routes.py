@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import urljoin
 from urllib.parse import urlparse, urlunsplit
 from bs4 import BeautifulSoup
@@ -7,15 +8,23 @@ from models import LinkRequest, HTMLResponse, FetchLinksPageResponse, FetchLinks
 import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-import time
+import asyncio
+
+# Logger para las rutas
+logger = logging.getLogger("Routes")
 
 router = APIRouter() # Crear el enrutador para gestionar las rutas
+
+# Configuración del pool de navegadores
+NUM_BROWSERS = 1  # Número de navegadores en el pool
+browser_pool = asyncio.Queue(maxsize=NUM_BROWSERS)
 
 def abrir_navegador(disable_javascript = False):
     """
     Configura y abre un navegador en modo headless usando Selenium.
     Si disable_javascript es True, se deshabilita JavaScript en el navegador.
     """
+    logger.info("Abriendo navegador con configuración headless...")
     chrome_options = Options()
     chrome_options.add_argument('--headless')  # Ejecutar sin interfaz gráfica
     chrome_options.add_argument('--no-sandbox')  # Requerido para entornos sin privilegios elevados
@@ -32,7 +41,24 @@ def abrir_navegador(disable_javascript = False):
     wd = webdriver.Chrome(options=chrome_options)
     return wd
 
-def fetch_html_selenium(link):
+async def inicializar_navegadores():
+    """
+    Inicializa el pool de navegadores al arrancar la aplicación.
+    """
+    logger.info("Inicializando pool de navegadores...")
+    for _ in range(NUM_BROWSERS):
+        await browser_pool.put(abrir_navegador(disable_javascript=True))
+
+async def cerrar_navegadores():
+    """
+    Cierra todos los navegadores al apagar la aplicación.
+    """
+    logger.info("Cerrando todos los navegadores...")
+    while not browser_pool.empty():
+        navegador = await browser_pool.get()
+        navegador.quit()
+
+async def fetch_html_selenium(link):
     """
     Extrae el código HTML de una página web utilizando Selenium.
     Argumentos:
@@ -40,15 +66,23 @@ def fetch_html_selenium(link):
     Retorna:
         str: Contenido HTML de la página.
     """
-    wd = abrir_navegador(True)  # Abre el navegador con JavaScript deshabilitado
-    wd.get(link)
-    time.sleep(3)  # Espera para asegurar que la página esté completamente cargada
-    html = wd.page_source
-    wd.close()  # Cierra el navegador
+    logger.info(f"Extrayendo HTML con Selenium para el enlace: {link}")
+    wd = await browser_pool.get()   # Toma un navegador disponible del pool
+    try:
+        wd.get(link)
+        await asyncio.sleep(3)  # Espera para asegurar que la página esté completamente cargada
+        html = wd.page_source
+        logger.info(f"HTML extraído correctamente para {link}")
+        return html, "html extraido por metodo selenium"
+    except Exception as e:
+        logger.error(f"Error al extraer HTML con Selenium para {link}: {e}")
+        raise
+    finally:
+        await browser_pool.put(wd)  # Devuelve el navegador al pool
 
-    return html,"html extraido por metodo selenium"
 
-def fetch_html_requests(link):
+
+async def fetch_html_requests(link):
     """
     Extrae el código HTML de una página web utilizando la biblioteca requests.
     Argumentos:
@@ -56,10 +90,16 @@ def fetch_html_requests(link):
     Retorna:
         str: Contenido HTML de la página.
     """
-    response = requests.get(link)
-    response.encoding = "utf-8"  # Configura la codificación a UTF-8
-    html = response.content.decode('utf-8')  # Decodifica el contenido en texto HTML
-    return html, "html extraido por metodo request"
+    logger.info(f"Extrayendo HTML con Requests para el enlace: {link}")
+    try:
+        response = requests.get(link)
+        response.encoding = "utf-8"  # Configura la codificación a UTF-8
+        html = response.content.decode('utf-8')  # Decodifica el contenido en texto HTML
+        logger.info(f"HTML extraído correctamente para {link}")
+        return html, "html extraido por metodo request"
+    except Exception as e:
+        logger.error(f"Error al extraer HTML con Requests para {link}: {e}")
+        raise
 
 def extraer_links_page_request(url,prefixes):
     urls = {}
@@ -111,7 +151,7 @@ def filtrar_link(url,prefixes):
     return False
 
 
-@router.get("/fetch_html", response_model=HTMLResponse, response_description="Consultar el html de un link", status_code=status.HTTP_200_OK)
+@router.post("/fetch_html", response_model=HTMLResponse, response_description="Consultar el html de un link", status_code=status.HTTP_200_OK)
 def fetch_html(link_request: LinkRequest = Body(...)):
     """
     Endpoint para obtener el HTML de una página web.
@@ -142,8 +182,8 @@ def fetch_html(link_request: LinkRequest = Body(...)):
         # Manejar errores y retornar un mensaje de error
         raise HTTPException(status_code=400, detail=f"Error de datos: {str(e)}")
 
-@router.get("/fetch_links_page", response_model=FetchLinksPageResponse, response_description="Extrae los links de una pagina web", status_code=status.HTTP_200_OK)
-def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)):
+@router.post("/fetch_links_page", response_model=FetchLinksPageResponse, response_description="Extrae los links de una pagina web", status_code=status.HTTP_200_OK)
+async def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)):
     """
     Endpoint para extraer todos los enlaces de una página web especificada en el `fetch_links_page_request`.
 
@@ -158,6 +198,7 @@ def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)
             - links (list[str]): Lista de URLs únicas extraídas que cumplen con los prefijos especificados excluidos.
             - detail (str): Mensaje indicando el metodo utilizado o detalles sobre el estado de la extracción.
     """
+    logger.info(f"Procesando solicitud para extraer HTML con datos: {fetch_links_page_request}")
     try:
         urls = {}
         # Convertir el modelo de petición a un formato JSON serializable
@@ -169,11 +210,13 @@ def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)
 
         # Llama a la función de extracción según el metodo especificado
         if metodo == "selenium":
-            html_content, response_detail = fetch_html_selenium(link)
+            html_content, response_detail = await fetch_html_selenium(link)
         elif metodo == "requests":
-            html_content, response_detail = fetch_html_requests(link)
+            html_content, response_detail = await fetch_html_requests(link)
         else:
             return "", "Metodo solicitado no encontrado"
+
+        logger.info(f"HTML extraído correctamente para {link} usando {metodo}")
 
         # Extrae enlaces de la página y filtra
         soup = BeautifulSoup(html_content, 'html.parser')
@@ -187,9 +230,13 @@ def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)
 
             enlace_limpiado = limpiar_url(url)
             urls = agregar_url(urls, enlace_limpiado) if filtrar_link(enlace_limpiado, prefixes) == True else urls
-
+        logger.info(f"Enlaces extraídos y filtrados exitosamente del link {link}. Total: {len(urls)} enlaces encontrados.")
         # Retornar la lista de links
         return {"links": list(urls), "detail": response_detail}
     except ValueError as e:
         # Manejar errores y retornar un mensaje de error
+        logger.error(f"Error en la extracción de enlaces: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Error de datos: {str(e)}")
+    except Exception as e:
+        logger.critical(f"Error inesperado: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error inesperado en el servidor.")

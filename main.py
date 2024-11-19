@@ -2,7 +2,20 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from dotenv import dotenv_values
 import uvicorn
-from routes import router  # Importa el router desde routes.py
+import logging
+from routes import router, inicializar_navegadores, cerrar_navegadores  # Importa el router desde routes.py
+
+# Configuración del logging
+logging.basicConfig(
+    level=logging.INFO,  # Nivel de log mínimo (INFO, WARNING, ERROR, DEBUG)
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("app.log"),  # Escribir logs en un archivo
+        logging.StreamHandler()  # Mostrar logs en consola
+    ]
+)
+
+logger = logging.getLogger("MainApp")  # Logger principal
 
 # Cargar las variables de entorno desde el archivo .env
 config = dotenv_values(".env")
@@ -10,9 +23,11 @@ config = dotenv_values(".env")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Código de inicio de la aplicación
-    # Aquí se pueden agregar inicializaciones como abrir conexiones a bases de datos o cargar configuraciones
+    await inicializar_navegadores()
 
     yield # Deja que la aplicación siga ejecutándose
+
+    await cerrar_navegadores()
 
     # Código de cierre para liberar recursos, como cerrar conexiones o limpiar cachés
 

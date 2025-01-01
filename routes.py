@@ -9,14 +9,16 @@ import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 import asyncio
+from dotenv import dotenv_values
+
+config = dotenv_values(".env")
 
 # Logger para las rutas
 logger = logging.getLogger("Routes")
-
 router = APIRouter() # Crear el enrutador para gestionar las rutas
 
 # Configuración del pool de navegadores
-NUM_BROWSERS = 1  # Número de navegadores en el pool
+NUM_BROWSERS = int(config["NUM_BROWSERS"])  # Número de navegadores en el pool
 browser_pool = asyncio.Queue(maxsize=NUM_BROWSERS)
 
 def abrir_navegador(disable_javascript = False):
@@ -80,8 +82,6 @@ async def fetch_html_selenium(link):
     finally:
         await browser_pool.put(wd)  # Devuelve el navegador al pool
 
-
-
 async def fetch_html_requests(link):
     """
     Extrae el código HTML de una página web utilizando la biblioteca requests.
@@ -100,29 +100,6 @@ async def fetch_html_requests(link):
     except Exception as e:
         logger.error(f"Error al extraer HTML con Requests para {link}: {e}")
         raise
-
-def extraer_links_page_request(url,prefixes):
-    urls = {}
-    try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        enlaces = soup.find_all('a')
-
-        # Procesa cada enlace, asegura que el enlace sea absoluto y limítalo según el prefijo
-        for enlace in enlaces:
-            url = enlace.get('href')
-            if url is not None and url.startswith('http') == False:
-                url = urljoin(response.url,url)
-            elif url is None:
-                url = ""
-
-            # Limpia y filtra cada URL
-            enlace_limpiado = limpiar_url(url)
-            urls = agregar_url(urls,enlace_limpiado) if filtrar_link(enlace_limpiado,prefixes) == True else urls
-    except Exception as e:
-        print(f"ERROR en {url}: {e}")
-        pass
-    return urls
 
 def limpiar_url(url):
     # Elimina fragmentos y query params de la URL para limpieza y normalización
@@ -152,7 +129,7 @@ def filtrar_link(url,prefixes):
 
 
 @router.post("/fetch_html", response_model=HTMLResponse, response_description="Consultar el html de un link", status_code=status.HTTP_200_OK)
-def fetch_html(link_request: LinkRequest = Body(...)):
+async def fetch_html(link_request: LinkRequest = Body(...)):
     """
     Endpoint para obtener el HTML de una página web.
     Argumentos:
@@ -168,19 +145,30 @@ def fetch_html(link_request: LinkRequest = Body(...)):
         link = link_request_json["link"]
         metodo = link_request_json["metodo"]
 
+        logger.info(f"Se recibió una solicitud para el link: {link} con el método: {metodo}")
+
         # Llamar a la función de extracción según el metodo especificado
         if metodo == "selenium" :
-            html_content,response_detail = fetch_html_selenium(link)
+            html_content,response_detail = await fetch_html_selenium(link)
+            logger.info(f"HTML extraído exitosamente utilizando Selenium para el link: {link}")
         elif metodo == "requests":
-            html_content,response_detail = fetch_html_requests(link)
+            html_content,response_detail = await fetch_html_requests(link)
+            logger.info(f"HTML extraído exitosamente utilizando Requests para el link: {link}")
         else:
             html_content, response_detail = ("","Metodo solicitado no encontrado")
+            logger.warning(f"El método '{metodo}' no es válido para el link: {link}. Se retornó un mensaje de error.")
 
         # Retornar el contenido HTML extraído y un mensaje de éxito
         return {"html": html_content, "detail": response_detail}
     except ValueError as e:
+        logger.error(f"Error de datos al procesar la solicitud: {str(e)}")
         # Manejar errores y retornar un mensaje de error
         raise HTTPException(status_code=400, detail=f"Error de datos: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"Error inesperado al procesar la solicitud: {str(e)}")
+        # Manejo de errores generales
+        raise HTTPException(status_code=500, detail=f"Error inesperado: {str(e)}")
 
 @router.post("/fetch_links_page", response_model=FetchLinksPageResponse, response_description="Extrae los links de una pagina web", status_code=status.HTTP_200_OK)
 async def fetch_links_page(fetch_links_page_request: FetchLinksPageRequest = Body(...)):
